@@ -1,0 +1,580 @@
+import express from 'express';
+import { GoogleCalendarService } from '../services/googleCalendar';
+import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
+import { AuthenticatedRequestWithRole, requireSuperAdmin } from '../middleware/permissions';
+import { getDatabase } from '../lib/database';
+
+const router = express.Router();
+const googleCalendarService = new GoogleCalendarService();
+
+// Google OAuth認証URL取得
+router.get('/auth/url', authenticateToken, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const authUrl = googleCalendarService.generateAuthUrl(req.user.id);
+
+    res.json({
+      authUrl,
+      message: 'Google認証URLを生成しました'
+    });
+
+  } catch (error) {
+    console.error('Google認証URL生成エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'Google認証URLの生成に失敗しました'
+    });
+  }
+});
+
+// Google OAuth認証コールバック処理
+router.post('/auth/callback', authenticateToken, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        error: '認証コードが必要です',
+        message: 'Google認証コードが送信されていません'
+      });
+    }
+
+    await googleCalendarService.handleAuthCallback(code, req.user.id);
+
+    res.json({
+      success: true,
+      message: 'Googleカレンダー認証が完了しました'
+    });
+
+  } catch (error) {
+    console.error('Google認証コールバックエラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'Google認証の処理に失敗しました'
+    });
+  }
+});
+
+// ユーザーの認証状態確認
+router.get('/auth/status', authenticateToken, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const isAuthenticated = await googleCalendarService.checkUserCalendarAuth(req.user.id);
+
+    res.json({
+      isAuthenticated,
+      message: isAuthenticated ? 'Googleカレンダー認証済み' : 'Googleカレンダー認証が必要です'
+    });
+
+  } catch (error) {
+    console.error('認証状態確認エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: '認証状態の確認に失敗しました'
+    });
+  }
+});
+
+// Googleカレンダー認証解除
+router.post('/auth/revoke', authenticateToken, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    await googleCalendarService.revokeUserCalendarAuth(req.user.id);
+
+    res.json({
+      success: true,
+      message: 'Googleカレンダー認証を解除しました'
+    });
+
+  } catch (error) {
+    console.error('認証解除エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: '認証解除に失敗しました'
+    });
+  }
+});
+
+// ユーザーのカレンダー一覧を取得
+router.get('/calendars', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です'
+      });
+    }
+
+    const googleCalendarService = new GoogleCalendarService();
+
+    // ここではJWTトークンではなく、保存されているGoogleアクセストークンが必要
+    // 実装では、認証時に取得したGoogleアクセストークンをどこかに保存する必要がある
+    // 今回は簡易実装のため、リクエストヘッダーから取得
+    const googleAccessToken = req.headers['x-google-token'] as string;
+
+    if (!googleAccessToken) {
+      return res.status(400).json({
+        error: 'Googleアクセストークンが必要です',
+        message: 'x-google-tokenヘッダーでGoogleアクセストークンを送信してください'
+      });
+    }
+
+    googleCalendarService.setCredentials(googleAccessToken);
+    const calendars = await googleCalendarService.getUserCalendars();
+
+    return res.json({
+      message: 'カレンダー一覧を取得しました',
+      calendars: calendars.map(cal => ({
+        id: cal.id,
+        summary: cal.summary,
+        primary: cal.primary,
+        accessRole: cal.accessRole
+      }))
+    });
+
+  } catch (error) {
+    console.error('カレンダー一覧取得エラー:', error);
+    return res.status(500).json({
+      error: 'カレンダー一覧の取得に失敗しました',
+      message: error instanceof Error ? error.message : '内部サーバーエラー'
+    });
+  }
+});
+
+// 指定期間のカレンダーイベントを取得
+router.get('/events', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です'
+      });
+    }
+
+    const { timeMin, timeMax, calendarId = 'primary' } = req.query;
+
+    if (!timeMin || !timeMax) {
+      return res.status(400).json({
+        error: '検索期間の指定が必要です',
+        message: 'timeMinとtimeMaxをクエリパラメータで指定してください'
+      });
+    }
+
+    const googleAccessToken = req.headers['x-google-token'] as string;
+
+    if (!googleAccessToken) {
+      return res.status(400).json({
+        error: 'Googleアクセストークンが必要です'
+      });
+    }
+
+    const googleCalendarService = new GoogleCalendarService();
+    googleCalendarService.setCredentials(googleAccessToken);
+
+    const events = await googleCalendarService.getCalendarEvents(
+      timeMin as string,
+      timeMax as string,
+      calendarId as string
+    );
+
+    return res.json({
+      message: 'カレンダーイベントを取得しました',
+      events: events.map(event => ({
+        id: event.id,
+        summary: event.summary,
+        start: event.start,
+        end: event.end,
+        description: event.description,
+        status: event.status
+      }))
+    });
+
+  } catch (error) {
+    console.error('カレンダーイベント取得エラー:', error);
+    return res.status(500).json({
+      error: 'カレンダーイベントの取得に失敗しました',
+      message: error instanceof Error ? error.message : '内部サーバーエラー'
+    });
+  }
+});
+
+// 空き時間を検索
+router.post('/availability', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です'
+      });
+    }
+
+    const {
+      userEmails,
+      timeMin,
+      timeMax,
+      duration,
+      preferredTimes
+    } = req.body;
+
+    if (!userEmails || !Array.isArray(userEmails) || userEmails.length === 0) {
+      return res.status(400).json({
+        error: 'ユーザーのメールアドレスが必要です',
+        message: 'userEmailsは空でない配列である必要があります'
+      });
+    }
+
+    if (!timeMin || !timeMax) {
+      return res.status(400).json({
+        error: '検索期間の指定が必要です',
+        message: 'timeMinとtimeMaxを指定してください'
+      });
+    }
+
+    if (!duration || duration < 30) {
+      return res.status(400).json({
+        error: '無効な時間設定です',
+        message: '縦もくの時間は30分以上で指定してください'
+      });
+    }
+
+    const googleAccessToken = req.headers['x-google-token'] as string;
+
+    if (!googleAccessToken) {
+      return res.status(400).json({
+        error: 'Googleアクセストークンが必要です'
+      });
+    }
+
+    const googleCalendarService = new GoogleCalendarService();
+    googleCalendarService.setCredentials(googleAccessToken);
+
+    const availableSlots = await googleCalendarService.findAvailableSlots({
+      userEmails,
+      timeMin,
+      timeMax,
+      duration,
+      preferredTimes
+    });
+
+    const bestSlots = availableSlots.slice(0, 5);
+
+    return res.json({
+      message: '空き時間の検索が完了しました',
+      data: {
+        totalSlotsFound: availableSlots.length,
+        bestSlots: bestSlots.map(slot => ({
+          start: slot.start.toISOString(),
+          end: slot.end.toISOString(),
+          availableMembers: slot.availableMembers,
+          participantCount: slot.participantCount,
+          participantRate: Math.round((slot.participantCount / userEmails.length) * 100)
+        })),
+        searchCriteria: {
+          duration,
+          participantCount: userEmails.length,
+          searchPeriod: {
+            from: timeMin,
+            to: timeMax
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('空き時間検索エラー:', error);
+    return res.status(500).json({
+      error: '空き時間の検索に失敗しました',
+      message: error instanceof Error ? error.message : '内部サーバーエラーが発生しました'
+    });
+  }
+});
+
+// 縦もくセッションのカレンダーイベント作成
+router.post('/events/tatemoku/:sessionId', authenticateToken, requireSuperAdmin, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const { sessionId } = req.params;
+    const db = getDatabase();
+
+    // セッション情報を取得
+    const session = await db.get(`
+      SELECT id, name, scheduled_date, start_time, end_time, status
+      FROM tatemoku_sessions
+      WHERE id = ?
+    `, [sessionId]);
+
+    if (!session) {
+      return res.status(404).json({
+        error: 'セッションが見つかりません',
+        message: '指定されたセッションIDが存在しません'
+      });
+    }
+
+    if (session.status !== 'active') {
+      return res.status(400).json({
+        error: 'セッションがアクティブではありません',
+        message: 'アクティブなセッションのみカレンダーイベントを作成できます'
+      });
+    }
+
+    // セッションの参加者メールアドレスを取得
+    const participants = await db.all(`
+      SELECT u.email
+      FROM tatemoku_group_members tgm
+      JOIN tatemoku_groups tg ON tgm.group_id = tg.id
+      JOIN users u ON tgm.user_id = u.id
+      WHERE tg.session_id = ?
+      UNION
+      SELECT u.email
+      FROM tatemoku_unassigned_members tum
+      JOIN users u ON tum.user_id = u.id
+      WHERE tum.session_id = ?
+    `, [sessionId, sessionId]);
+
+    const attendeeEmails = participants.map(p => p.email);
+
+    // Googleカレンダーイベント作成
+    const googleEventId = await googleCalendarService.createTatemokuEvent(req.user.id, {
+      name: session.name,
+      scheduledDate: session.scheduled_date,
+      startTime: session.start_time,
+      endTime: session.end_time,
+      description: `縦もくセッション: ${session.name}`,
+      attendeeEmails
+    });
+
+    if (!googleEventId) {
+      return res.status(500).json({
+        error: 'カレンダーイベント作成失敗',
+        message: 'Googleカレンダーイベントの作成に失敗しました'
+      });
+    }
+
+    // イベント情報をDBに保存
+    await db.run(`
+      INSERT INTO google_calendar_events (session_id, google_event_id, created_by)
+      VALUES (?, ?, ?)
+    `, [sessionId, googleEventId, req.user.id]);
+
+    res.json({
+      success: true,
+      googleEventId,
+      message: 'Googleカレンダーイベントを作成しました',
+      attendeesCount: attendeeEmails.length
+    });
+
+  } catch (error) {
+    console.error('カレンダーイベント作成エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'カレンダーイベントの作成に失敗しました'
+    });
+  }
+});
+
+// 縦もくセッションのカレンダーイベント更新
+router.put('/events/tatemoku/:sessionId', authenticateToken, requireSuperAdmin, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const { sessionId } = req.params;
+    const db = getDatabase();
+
+    // セッション情報とカレンダーイベント情報を取得
+    const sessionData = await db.get(`
+      SELECT
+        ts.id, ts.name, ts.scheduled_date, ts.start_time, ts.end_time, ts.status,
+        gce.google_event_id
+      FROM tatemoku_sessions ts
+      LEFT JOIN google_calendar_events gce ON ts.id = gce.session_id
+      WHERE ts.id = ?
+    `, [sessionId]);
+
+    if (!sessionData) {
+      return res.status(404).json({
+        error: 'セッションが見つかりません',
+        message: '指定されたセッションIDが存在しません'
+      });
+    }
+
+    if (!sessionData.google_event_id) {
+      return res.status(404).json({
+        error: 'カレンダーイベントが見つかりません',
+        message: 'このセッションのカレンダーイベントが存在しません'
+      });
+    }
+
+    // セッションの参加者メールアドレスを取得
+    const participants = await db.all(`
+      SELECT u.email
+      FROM tatemoku_group_members tgm
+      JOIN tatemoku_groups tg ON tgm.group_id = tg.id
+      JOIN users u ON tgm.user_id = u.id
+      WHERE tg.session_id = ?
+      UNION
+      SELECT u.email
+      FROM tatemoku_unassigned_members tum
+      JOIN users u ON tum.user_id = u.id
+      WHERE tum.session_id = ?
+    `, [sessionId, sessionId]);
+
+    const attendeeEmails = participants.map(p => p.email);
+
+    // Googleカレンダーイベント更新
+    await googleCalendarService.updateTatemokuEvent(req.user.id, sessionData.google_event_id, {
+      name: sessionData.name,
+      scheduledDate: sessionData.scheduled_date,
+      startTime: sessionData.start_time,
+      endTime: sessionData.end_time,
+      description: `縦もくセッション: ${sessionData.name}`,
+      attendeeEmails
+    });
+
+    res.json({
+      success: true,
+      message: 'Googleカレンダーイベントを更新しました',
+      attendeesCount: attendeeEmails.length
+    });
+
+  } catch (error) {
+    console.error('カレンダーイベント更新エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'カレンダーイベントの更新に失敗しました'
+    });
+  }
+});
+
+// 縦もくセッションのカレンダーイベント削除
+router.delete('/events/tatemoku/:sessionId', authenticateToken, requireSuperAdmin, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const { sessionId } = req.params;
+    const db = getDatabase();
+
+    // カレンダーイベント情報を取得
+    const eventData = await db.get(`
+      SELECT google_event_id, created_by
+      FROM google_calendar_events
+      WHERE session_id = ?
+    `, [sessionId]);
+
+    if (!eventData) {
+      return res.status(404).json({
+        error: 'カレンダーイベントが見つかりません',
+        message: 'このセッションのカレンダーイベントが存在しません'
+      });
+    }
+
+    // Googleカレンダーイベント削除
+    await googleCalendarService.deleteTatemokuEvent(eventData.created_by, eventData.google_event_id);
+
+    // DBからイベント情報を削除
+    await db.run('DELETE FROM google_calendar_events WHERE session_id = ?', [sessionId]);
+
+    res.json({
+      success: true,
+      message: 'Googleカレンダーイベントを削除しました'
+    });
+
+  } catch (error) {
+    console.error('カレンダーイベント削除エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'カレンダーイベントの削除に失敗しました'
+    });
+  }
+});
+
+// セッションのカレンダーイベント一覧取得
+router.get('/events/tatemoku/:sessionId', authenticateToken, async (req: AuthenticatedRequestWithRole, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: '認証が必要です',
+        message: '有効なアクセストークンが必要です'
+      });
+    }
+
+    const { sessionId } = req.params;
+    const db = getDatabase();
+
+    const eventData = await db.get(`
+      SELECT
+        gce.id,
+        gce.google_event_id,
+        gce.created_by,
+        gce.created_at,
+        u.name as created_by_name,
+        ts.name as session_name,
+        ts.scheduled_date,
+        ts.start_time,
+        ts.end_time
+      FROM google_calendar_events gce
+      JOIN users u ON gce.created_by = u.id
+      JOIN tatemoku_sessions ts ON gce.session_id = ts.id
+      WHERE gce.session_id = ?
+    `, [sessionId]);
+
+    if (!eventData) {
+      return res.json({
+        hasCalendarEvent: false,
+        message: 'このセッションにはカレンダーイベントが作成されていません'
+      });
+    }
+
+    res.json({
+      hasCalendarEvent: true,
+      event: eventData,
+      message: 'カレンダーイベント情報を取得しました'
+    });
+
+  } catch (error) {
+    console.error('カレンダーイベント取得エラー:', error);
+    res.status(500).json({
+      error: 'サーバーエラー',
+      message: 'カレンダーイベント情報の取得に失敗しました'
+    });
+  }
+});
+
+export default router;

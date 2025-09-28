@@ -1,0 +1,164 @@
+import { google } from 'googleapis';
+import { FreeBusyResponse, AvailabilityRequest, TimeSlot } from '../types';
+
+export class GoogleCalendarService {
+  private oauth2Client: any;
+
+  constructor() {
+    this.oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+  }
+
+  getAuthUrl(): string {
+    const scopes = [
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/calendar.freebusy',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile'
+    ];
+
+    return this.oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      prompt: 'consent'
+    });
+  }
+
+  async exchangeCodeForTokens(code: string): Promise<any> {
+    try {
+      const response = await this.oauth2Client.getToken(code);
+      return response.tokens;
+    } catch (error) {
+      console.error('Token exchange error:', error);
+      throw error;
+    }
+  }
+
+  setCredentials(accessToken: string, refreshToken?: string) {
+    this.oauth2Client.setCredentials({
+      access_token: accessToken,
+      refresh_token: refreshToken
+    });
+  }
+
+  async getFreeBusyInfo(userEmails: string[], timeMin: string, timeMax: string): Promise<FreeBusyResponse> {
+    const calendar: any = google.calendar({ version: 'v3', auth: this.oauth2Client });
+
+    const items = userEmails.map(email => ({ id: email }));
+
+    const response = await calendar.freebusy.query({
+      requestBody: {
+        timeMin,
+        timeMax,
+        items
+      }
+    });
+
+    return response.data as FreeBusyResponse;
+  }
+
+  async findAvailableSlots(request: AvailabilityRequest): Promise<TimeSlot[]> {
+    try {
+      const freeBusyData = await this.getFreeBusyInfo(
+        request.userEmails,
+        request.timeMin,
+        request.timeMax
+      );
+
+      const startTime = new Date(request.timeMin);
+      const endTime = new Date(request.timeMax);
+      const durationMs = request.duration * 60 * 1000;
+
+      const availableSlots: TimeSlot[] = [];
+
+      for (let currentTime = new Date(startTime); currentTime < endTime; currentTime.setMinutes(currentTime.getMinutes() + 30)) {
+        const slotEnd = new Date(currentTime.getTime() + durationMs);
+
+        if (slotEnd > endTime) break;
+
+        if (request.preferredTimes) {
+          const hour = currentTime.getHours();
+          const day = currentTime.getDay();
+
+          if (hour < request.preferredTimes.startHour ||
+              hour >= request.preferredTimes.endHour ||
+              !request.preferredTimes.days.includes(day)) {
+            continue;
+          }
+        }
+
+        const availableMembers: string[] = [];
+
+        for (const email of request.userEmails) {
+          const userBusyTimes = freeBusyData.calendars[email]?.busy || [];
+
+          const isAvailable = !userBusyTimes.some(busyTime => {
+            const busyStart = new Date(busyTime.start);
+            const busyEnd = new Date(busyTime.end);
+
+            return (currentTime < busyEnd && slotEnd > busyStart);
+          });
+
+          if (isAvailable) {
+            availableMembers.push(email);
+          }
+        }
+
+        if (availableMembers.length > 0) {
+          availableSlots.push({
+            start: new Date(currentTime),
+            end: new Date(slotEnd),
+            availableMembers,
+            participantCount: availableMembers.length
+          });
+        }
+      }
+
+      return availableSlots.sort((a, b) => b.participantCount - a.participantCount);
+    } catch (error) {
+      console.error('空き時間検索エラー:', error);
+      throw new Error('空き時間の検索に失敗しました');
+    }
+  }
+
+  async createCalendarEvent(eventDetails: {
+    summary: string;
+    start: Date;
+    end: Date;
+    attendees: string[];
+    description?: string;
+  }) {
+    const calendar: any = google.calendar({ version: 'v3', auth: this.oauth2Client });
+
+    const event = {
+      summary: eventDetails.summary,
+      description: eventDetails.description,
+      start: {
+        dateTime: eventDetails.start.toISOString(),
+        timeZone: 'Asia/Tokyo'
+      },
+      end: {
+        dateTime: eventDetails.end.toISOString(),
+        timeZone: 'Asia/Tokyo'
+      },
+      attendees: eventDetails.attendees.map(email => ({ email })),
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'email', minutes: 24 * 60 },
+          { method: 'popup', minutes: 30 }
+        ]
+      }
+    };
+
+    const response = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: event
+    });
+
+    return response.data;
+  }
+}

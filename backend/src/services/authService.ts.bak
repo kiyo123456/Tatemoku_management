@@ -1,0 +1,91 @@
+import { google } from 'googleapis';
+import { generateAccessToken } from '../middleware/auth';
+
+export class AuthService {
+  private oauth2Client: any;
+
+  constructor() {
+    this.oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+  }
+
+  async getUserInfo(accessToken: string) {
+    this.oauth2Client.setCredentials({ access_token: accessToken });
+
+    const oauth2: any = google.oauth2({ version: 'v2', auth: this.oauth2Client });
+    const { data } = await oauth2.userinfo.get();
+
+    return {
+      id: data.id!,
+      email: data.email!,
+      name: data.name!,
+      picture: data.picture
+    };
+  }
+
+  async authenticateUser(googleTokens: any) {
+    try {
+      const userInfo = await this.getUserInfo(googleTokens.access_token);
+
+      const user = {
+        id: userInfo.id,
+        email: userInfo.email,
+        name: userInfo.name,
+        googleId: userInfo.id,
+        accessToken: googleTokens.access_token,
+        refreshToken: googleTokens.refresh_token,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const jwtToken = generateAccessToken({
+        id: user.id,
+        email: user.email,
+        name: user.name
+      });
+
+      return {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          googleId: user.googleId
+        },
+        tokens: {
+          accessToken: jwtToken,
+          googleAccessToken: googleTokens.access_token,
+          googleRefreshToken: googleTokens.refresh_token,
+          expiresIn: '24h'
+        }
+      };
+
+    } catch (error) {
+      console.error('ユーザー認証エラー:', error);
+      throw new Error('ユーザー情報の取得に失敗しました');
+    }
+  }
+
+  async refreshGoogleToken(refreshToken: string) {
+    try {
+      this.oauth2Client.setCredentials({ refresh_token: refreshToken });
+      const { credentials } = await this.oauth2Client.refreshAccessToken();
+
+      return {
+        accessToken: credentials.access_token,
+        expiryDate: credentials.expiry_date
+      };
+
+    } catch (error) {
+      console.error('Googleトークンリフレッシュエラー:', error);
+      throw new Error('Googleトークンのリフレッシュに失敗しました');
+    }
+  }
+
+  validateTokenExpiry(expiryDate?: number | null): boolean {
+    if (!expiryDate) return false;
+    return Date.now() < expiryDate;
+  }
+}

@@ -1,0 +1,834 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+
+interface Group {
+  id: string;
+  name: string;
+  memberCount: number;
+  adminId: string;
+  adminName: string;
+  createdAt: string;
+}
+
+interface Member {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  groupId: string;
+  groupName: string;
+  joinedAt: string;
+  hasSubgroupAssignment?: boolean;
+}
+
+interface Subgroup {
+  id: string;
+  name: string;
+  description?: string;
+  parentGroupId: string;
+  memberCount: number;
+  members: Member[];
+  adminId?: string;
+  adminName?: string;
+  createdAt: string;
+}
+
+interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  isSuperAdmin: boolean;
+}
+
+export default function SuperAdminPanel() {
+  const { user } = useAuth();
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+  const [targetGroupId, setTargetGroupId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'groups' | 'members' | 'grouping' | 'move'>('groups');
+  const [subgroups, setSubgroups] = useState<Subgroup[]>([]);
+  const [selectedGroupForSubgroups, setSelectedGroupForSubgroups] = useState('');
+  const [newSubgroupName, setNewSubgroupName] = useState('');
+  const [unassignedMembers, setUnassignedMembers] = useState<Member[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [showAdminSelect, setShowAdminSelect] = useState<string | null>(null);
+  const [selectedGroupDetails, setSelectedGroupDetails] = useState<string | null>(null);
+  const [groupSubgroups, setGroupSubgroups] = useState<Subgroup[]>([]);
+
+  // スーパー管理者権限チェック
+  const isSuperAdmin = user?.role === 'super_admin' && user?.is_super_admin;
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      fetchGroups();
+      fetchMembers();
+      fetchAdminUsers();
+    }
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
+    if (selectedGroupForSubgroups) {
+      fetchSubgroups(selectedGroupForSubgroups);
+      fetchUnassignedMembers(selectedGroupForSubgroups);
+    }
+  }, [selectedGroupForSubgroups]);
+
+  const fetchGroups = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/admin/test-data');
+      const data = await response.json();
+      if (data.groups) {
+        setGroups(data.groups);
+      }
+      if (data.members) {
+        setMembers(data.members);
+      }
+    } catch (error) {
+      console.error('グループ取得エラー:', error);
+    }
+  };
+
+  const fetchMembers = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/admin/test-data');
+      const data = await response.json();
+      if (data.members) {
+        setMembers(data.members);
+      }
+    } catch (error) {
+      console.error('メンバー取得エラー:', error);
+    }
+  };
+
+  const fetchAdminUsers = async () => {
+    try {
+      const tokens = localStorage.getItem('tokens');
+      const accessToken = tokens ? JSON.parse(tokens).accessToken : null;
+
+      const response = await fetch('http://localhost:3001/api/admin/admin-users', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+      if (data.success && data.adminUsers) {
+        setAdminUsers(data.adminUsers);
+      }
+    } catch (error) {
+      console.error('管理者一覧取得エラー:', error);
+    }
+  };
+
+  const fetchSubgroups = async (groupId: string) => {
+    try {
+      const tokens = localStorage.getItem('tokens');
+      const accessToken = tokens ? JSON.parse(tokens).accessToken : null;
+
+      const response = await fetch(`http://localhost:3001/api/admin/subgroups/${groupId}`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+      if (data.subgroups) {
+        setSubgroups(data.subgroups);
+      }
+    } catch (error) {
+      console.error('サブグループ取得エラー:', error);
+    }
+  };
+
+  const fetchUnassignedMembers = async (groupId: string) => {
+    try {
+      const tokens = localStorage.getItem('tokens');
+      const accessToken = tokens ? JSON.parse(tokens).accessToken : null;
+
+      const response = await fetch(`http://localhost:3001/api/admin/members?groupId=${groupId}`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+      if (data.members) {
+        const unassigned = data.members.filter((member: Member) => !member.hasSubgroupAssignment);
+        setUnassignedMembers(unassigned);
+      }
+    } catch (error) {
+      console.error('未割り当てメンバー取得エラー:', error);
+    }
+  };
+
+  const createSubgroup = async () => {
+    if (!selectedGroupForSubgroups || !newSubgroupName.trim()) return;
+
+    setLoading(true);
+    try {
+      const tokens = localStorage.getItem('tokens');
+      const accessToken = tokens ? JSON.parse(tokens).accessToken : null;
+
+      const response = await fetch('http://localhost:3001/api/admin/subgroups', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          name: newSubgroupName.trim(),
+          description: '',
+          parentGroupId: selectedGroupForSubgroups
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert('サブグループを作成しました');
+        setNewSubgroupName('');
+        fetchSubgroups(selectedGroupForSubgroups);
+        fetchUnassignedMembers(selectedGroupForSubgroups);
+      } else {
+        alert('サブグループの作成に失敗しました: ' + (data.message || data.error));
+      }
+    } catch (error) {
+      console.error('サブグループ作成エラー:', error);
+      alert('エラーが発生しました');
+    }
+    setLoading(false);
+  };
+
+  const moveMember = async () => {
+    if (!selectedMember || !targetGroupId) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/admin/move-member', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('tokens') || '{}').accessToken}`
+        },
+        body: JSON.stringify({
+          userId: selectedMember.id,
+          fromGroupId: selectedMember.groupId,
+          toGroupId: targetGroupId
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert('メンバーの移動が完了しました');
+        fetchMembers();
+        setSelectedMember(null);
+        setTargetGroupId('');
+      } else {
+        alert('メンバーの移動に失敗しました');
+      }
+    } catch (error) {
+      console.error('メンバー移動エラー:', error);
+      alert('エラーが発生しました');
+    }
+    setLoading(false);
+  };
+
+
+  const assignToSubgroup = async (subgroupId: string, memberIds: string[]) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/admin/subgroups/${subgroupId}/members`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('tokens') || '{}').accessToken}`
+        },
+        body: JSON.stringify({
+          userIds: memberIds
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        fetchSubgroups(selectedGroupForSubgroups);
+        fetchUnassignedMembers(selectedGroupForSubgroups);
+      } else {
+        alert('メンバーの割り当てに失敗しました');
+      }
+    } catch (error) {
+      console.error('メンバー割り当てエラー:', error);
+      alert('エラーが発生しました');
+    }
+    setLoading(false);
+  };
+
+  const deleteSubgroup = async (subgroupId: string) => {
+    if (!confirm('このサブグループを削除しますか？メンバーは未割り当てに戻ります。')) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/admin/subgroups/${subgroupId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('tokens') || '{}').accessToken}`
+        }
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert('サブグループを削除しました');
+        fetchSubgroups(selectedGroupForSubgroups);
+        fetchUnassignedMembers(selectedGroupForSubgroups);
+      } else {
+        alert('サブグループの削除に失敗しました');
+      }
+    } catch (error) {
+      console.error('サブグループ削除エラー:', error);
+      alert('エラーが発生しました');
+    }
+    setLoading(false);
+  };
+
+  const assignSubgroupAdmin = async (subgroupId: string, adminId: string) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/admin/subgroups/${subgroupId}/admin`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('tokens') || '{}').accessToken}`
+        },
+        body: JSON.stringify({
+          adminId
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert('サブグループ管理者を指定しました');
+        fetchSubgroups(selectedGroupForSubgroups);
+      } else {
+        alert('管理者の指定に失敗しました');
+      }
+    } catch (error) {
+      console.error('管理者指定エラー:', error);
+      alert('エラーが発生しました');
+    }
+    setLoading(false);
+  };
+
+  const fetchGroupSubgroups = async (groupId: string) => {
+    try {
+      const tokens = localStorage.getItem('tokens');
+      const accessToken = tokens ? JSON.parse(tokens).accessToken : null;
+
+      const response = await fetch(`http://localhost:3001/api/admin/subgroups/${groupId}`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+      if (data.subgroups) {
+        setGroupSubgroups(data.subgroups);
+      }
+    } catch (error) {
+      console.error('グループサブグループ取得エラー:', error);
+    }
+  };
+
+  const handleGroupClick = (groupId: string) => {
+    if (selectedGroupDetails === groupId) {
+      setSelectedGroupDetails(null);
+      setGroupSubgroups([]);
+    } else {
+      setSelectedGroupDetails(groupId);
+      fetchGroupSubgroups(groupId);
+    }
+  };
+
+  if (!isSuperAdmin) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-red-800 mb-2">アクセス権限がありません</h3>
+        <p className="text-red-600">この画面はposse②代表のみアクセス可能です。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto p-6">
+      <div className="bg-white rounded-lg shadow-md">
+        <div className="border-b border-gray-200">
+          <div className="p-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              スーパー管理者パネル
+            </h2>
+            <p className="text-gray-600">
+              posse②代表専用 - 全グループ・メンバーの管理
+            </p>
+          </div>
+
+          {/* タブ */}
+          <div className="flex space-x-8 px-6">
+            <button
+              onClick={() => setActiveTab('groups')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'groups'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              グループ管理
+            </button>
+            <button
+              onClick={() => setActiveTab('members')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'members'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              メンバー一覧
+            </button>
+            <button
+              onClick={() => setActiveTab('grouping')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'grouping'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              グルーピング
+            </button>
+            <button
+              onClick={() => setActiveTab('move')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'move'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              メンバー移動
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {/* グループ管理タブ */}
+          {activeTab === 'groups' && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">全グループ一覧</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        グループ名
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        メンバー数
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        管理者
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        作成日
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {groups.map((group) => (
+                      <React.Fragment key={group.id}>
+                        <tr
+                          className="cursor-pointer hover:bg-gray-50"
+                          onClick={() => handleGroupClick(group.id)}
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            <div className="flex items-center">
+                              <span className={`mr-2 transition-transform ${
+                                selectedGroupDetails === group.id ? 'rotate-90' : ''
+                              }`}>
+                                ▶
+                              </span>
+                              {group.name}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {group.memberCount}人
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {group.adminName}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {new Date(group.createdAt).toLocaleDateString('ja-JP')}
+                          </td>
+                        </tr>
+                        {selectedGroupDetails === group.id && (
+                          <tr>
+                            <td colSpan={4} className="px-6 py-4 bg-gray-50">
+                              <div className="border-l-4 border-blue-500 pl-4">
+                                <h4 className="font-medium text-lg mb-3 text-gray-900">
+                                  {group.name} のサブグループ詳細
+                                </h4>
+                                {groupSubgroups.length > 0 ? (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {groupSubgroups.map((subgroup, index) => (
+                                      <div key={subgroup.id} className={`border rounded-lg p-3 ${
+                                        index % 4 === 0 ? 'border-blue-200 bg-blue-50' :
+                                        index % 4 === 1 ? 'border-green-200 bg-green-50' :
+                                        index % 4 === 2 ? 'border-purple-200 bg-purple-50' : 'border-orange-200 bg-orange-50'
+                                      }`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                          <h5 className={`font-medium ${
+                                            index % 4 === 0 ? 'text-blue-700' :
+                                            index % 4 === 1 ? 'text-green-700' :
+                                            index % 4 === 2 ? 'text-purple-700' : 'text-orange-700'
+                                          }`}>
+                                            {subgroup.name}
+                                          </h5>
+                                          <span className="text-xs text-gray-600">
+                                            {subgroup.memberCount}人
+                                          </span>
+                                        </div>
+                                        <div className="text-xs text-gray-600 mb-2">
+                                          管理者: {subgroup.adminName || '未指定'}
+                                        </div>
+                                        <div className="space-y-1">
+                                          {subgroup.members?.map((member) => (
+                                            <div key={member.id} className="text-xs bg-white px-2 py-1 rounded border">
+                                              {member.name}
+                                            </div>
+                                          )) || (
+                                            <div className="text-xs text-gray-500 italic">メンバーなし</div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-center py-4 text-gray-500">
+                                    <p>このグループにはまだサブグループが作成されていません</p>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* メンバー一覧タブ */}
+          {activeTab === 'members' && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">全メンバー一覧</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        名前
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        メールアドレス
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        権限
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        所属グループ
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {members.map((member) => (
+                      <tr key={member.id}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {member.name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {member.email}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            member.role === 'admin'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {member.role === 'admin' ? '管理者' : 'メンバー'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {member.groupName}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* グルーピングタブ */}
+          {activeTab === 'grouping' && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">サブグループ管理</h3>
+
+              {/* グループ選択 */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  管理するグループを選択
+                </label>
+                <select
+                  value={selectedGroupForSubgroups}
+                  onChange={(e) => setSelectedGroupForSubgroups(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">グループを選択...</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedGroupForSubgroups && (
+                <>
+                  {/* サブグループ作成 */}
+                  <div className="bg-gray-50 p-4 rounded-lg mb-6">
+                    <h4 className="font-medium mb-3">新しいサブグループを作成</h4>
+                    <div className="flex gap-4">
+                      <input
+                        type="text"
+                        placeholder="サブグループ名"
+                        value={newSubgroupName}
+                        onChange={(e) => setNewSubgroupName(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        onClick={createSubgroup}
+                        disabled={!newSubgroupName.trim() || loading}
+                        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md"
+                      >
+                        {loading ? '作成中...' : '作成'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 既存サブグループ一覧 */}
+                  <div className="space-y-6">
+                    {subgroups.length > 0 ? (
+                      <div className="border rounded-lg p-4">
+                        <div className="flex justify-between items-center mb-4">
+                          <h4 className="font-medium">
+                            {groups.find(g => g.id === selectedGroupForSubgroups)?.name}
+                          </h4>
+                          <span className="text-sm text-black">
+                            {subgroups.reduce((total, sub) => total + sub.memberCount, 0) + unassignedMembers.length}人のメンバー
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {subgroups.map((subgroup, index) => (
+                            <div key={subgroup.id} className={`border-l-4 pl-4 ${
+                              index % 4 === 0 ? 'border-blue-500' :
+                              index % 4 === 1 ? 'border-green-500' :
+                              index % 4 === 2 ? 'border-purple-500' : 'border-orange-500'
+                            }`}>
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <h5 className={`font-medium ${
+                                    index % 4 === 0 ? 'text-blue-700' :
+                                    index % 4 === 1 ? 'text-green-700' :
+                                    index % 4 === 2 ? 'text-purple-700' : 'text-orange-700'
+                                  }`}>
+                                    {subgroup.name}
+                                  </h5>
+                                  <div className="mt-1 text-xs text-black">
+                                    管理者: {subgroup.adminName || '未指定'}
+                                    {!subgroup.adminId && (
+                                      <div className="mt-1">
+                                        {showAdminSelect === subgroup.id ? (
+                                          <div className="flex gap-2 items-center">
+                                            <select
+                                              className="text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                              onChange={(e) => {
+                                                const selectedAdminId = e.target.value;
+                                                if (selectedAdminId) {
+                                                  assignSubgroupAdmin(subgroup.id, selectedAdminId);
+                                                  setShowAdminSelect(null);
+                                                }
+                                              }}
+                                              defaultValue=""
+                                            >
+                                              <option value="">管理者を選択...</option>
+                                              {adminUsers.map((admin) => (
+                                                <option key={admin.id} value={admin.id}>
+                                                  {admin.name} ({admin.role === 'super_admin' ? 'スーパー管理者' : '管理者'})
+                                                </option>
+                                              ))}
+                                            </select>
+                                            <button
+                                              onClick={() => setShowAdminSelect(null)}
+                                              className="text-xs text-black hover:text-gray-700"
+                                            >
+                                              キャンセル
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            onClick={() => setShowAdminSelect(subgroup.id)}
+                                            className="ml-2 text-blue-500 hover:text-blue-700 underline text-xs"
+                                          >
+                                            指定
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => deleteSubgroup(subgroup.id)}
+                                  className="text-red-500 hover:text-red-700 text-sm ml-2"
+                                  disabled={loading}
+                                >
+                                  削除
+                                </button>
+                              </div>
+
+                              <div className="mt-2 space-y-1">
+                                {subgroup.members?.map((member) => (
+                                  <div key={member.id} className={`text-sm p-2 rounded flex justify-between ${
+                                    index % 4 === 0 ? 'bg-blue-50' :
+                                    index % 4 === 1 ? 'bg-green-50' :
+                                    index % 4 === 2 ? 'bg-purple-50' : 'bg-orange-50'
+                                  }`}>
+                                    <span>{member.name}</span>
+                                    <button
+                                      onClick={() => {/* TODO: メンバーをサブグループから削除 */}}
+                                      className="text-red-500 hover:text-red-700"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                )) || (
+                                  <div className="text-sm text-black italic">メンバーなし</div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 未割り当てメンバー */}
+                        {unassignedMembers.length > 0 && (
+                          <div className="mt-6 pt-4 border-t">
+                            <h5 className="font-medium text-black mb-3">未割り当てメンバー</h5>
+                            <div className="flex flex-wrap gap-2">
+                              {unassignedMembers.map((member) => (
+                                <div
+                                  key={member.id}
+                                  className="bg-gray-100 px-3 py-1 rounded-full text-sm cursor-pointer hover:bg-gray-200 flex items-center gap-2"
+                                  onClick={() => {
+                                    // TODO: サブグループ選択モーダルを表示
+                                    const subgroupId = prompt('どのサブグループに割り当てますか？\n' +
+                                      subgroups.map((s, i) => `${i + 1}. ${s.name}`).join('\n'));
+                                    if (subgroupId) {
+                                      const selectedSub = subgroups[parseInt(subgroupId) - 1];
+                                      if (selectedSub) {
+                                        assignToSubgroup(selectedSub.id, [member.id]);
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <span>{member.name}</span>
+                                  <span className="text-xs text-black">👆クリックで割り当て</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-black">
+                        <p>まだサブグループが作成されていません</p>
+                        <p className="text-sm">上のフォームから新しいサブグループを作成してください</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* メンバー移動タブ */}
+          {activeTab === 'move' && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">メンバー移動</h3>
+              <div className="max-w-md space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    移動対象メンバー
+                  </label>
+                  <select
+                    value={selectedMember?.id || ''}
+                    onChange={(e) => {
+                      const member = members.find(m => m.id === e.target.value);
+                      setSelectedMember(member || null);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">メンバーを選択...</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name} ({member.groupName})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedMember && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      移動先グループ
+                    </label>
+                    <select
+                      value={targetGroupId}
+                      onChange={(e) => setTargetGroupId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">移動先を選択...</option>
+                      {groups
+                        .filter(group => group.id !== selectedMember.groupId)
+                        .map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name}
+                          </option>
+                        ))
+                      }
+                    </select>
+                  </div>
+                )}
+
+                <button
+                  onClick={moveMember}
+                  disabled={!selectedMember || !targetGroupId || loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded transition duration-200"
+                >
+                  {loading ? '移動中...' : 'メンバーを移動'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

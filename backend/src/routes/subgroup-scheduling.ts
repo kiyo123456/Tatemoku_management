@@ -1,0 +1,173 @@
+import express from 'express';
+import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
+import { getDatabase } from '../lib/database';
+
+const router = express.Router();
+
+// サブグループメンバー取得API
+router.get(
+  '/:subgroupId/members',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { subgroupId } = req.params;
+      const user = req.user!;
+      const db = getDatabase();
+
+      // サブグループの存在確認とアクセス権限チェック
+      const subgroupQuery = `
+        SELECT
+          sg.id as subgroup_id,
+          sg.name as subgroup_name,
+          g.id as group_id,
+          g.name as group_name,
+          sg.admin_id,
+          admin_user.name as admin_name,
+          CASE
+            WHEN sg.admin_id = ? THEN 'admin'
+            WHEN sgm.user_id = ? THEN 'member'
+            ELSE null
+          END as user_access_level
+        FROM sub_groups sg
+        JOIN groups g ON sg.group_id = g.id
+        LEFT JOIN users admin_user ON sg.admin_id = admin_user.id
+        LEFT JOIN sub_group_members sgm ON sg.id = sgm.subgroup_id AND sgm.user_id = ?
+        WHERE sg.id = ?
+      `;
+
+      const subgroupResult = await db.all(subgroupQuery, [user.id, user.id, user.id, subgroupId]);
+
+      if (subgroupResult.length === 0) {
+        return res.status(404).json({
+          error: 'サブグループが見つかりません',
+          message: '指定されたサブグループは存在しません'
+        });
+      }
+
+      const subgroup = subgroupResult[0];
+
+      // アクセス権限チェック：サブグループの管理者、メンバー、またはスーパー管理者のみアクセス可能
+      const hasAccess = subgroup.user_access_level === 'admin' ||
+                       subgroup.user_access_level === 'member' ||
+                       (user as any).role === 'super_admin';
+
+      if (!hasAccess) {
+        return res.status(403).json({
+          error: 'アクセス権限がありません',
+          message: 'このサブグループのメンバー情報にアクセスする権限がありません'
+        });
+      }
+
+      // サブグループメンバー取得
+      const membersQuery = `
+        SELECT
+          u.id,
+          u.name,
+          u.email,
+          u.role,
+          sgm.joined_at
+        FROM sub_group_members sgm
+        JOIN users u ON sgm.user_id = u.id
+        WHERE sgm.subgroup_id = ?
+        ORDER BY u.name
+      `;
+
+      const membersResult = await db.all(membersQuery, [subgroupId]);
+
+      const members = membersResult.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        joinedAt: row.joined_at
+      }));
+
+      return res.json({
+        subgroup: {
+          id: subgroup.subgroup_id,
+          name: subgroup.subgroup_name,
+          groupId: subgroup.group_id,
+          groupName: subgroup.group_name,
+          adminId: subgroup.admin_id,
+          adminName: subgroup.admin_name
+        },
+        members,
+        total: members.length,
+        message: 'サブグループメンバー情報を取得しました'
+      });
+
+    } catch (error) {
+      console.error('サブグループメンバー取得エラー:', error);
+      return res.status(500).json({
+        error: 'サブグループメンバーの取得に失敗しました',
+        message: 'サーバーエラーが発生しました'
+      });
+    }
+  }
+);
+
+// ユーザーがアクセス可能なサブグループ一覧取得API
+router.get(
+  '/available',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.user!;
+      const db = getDatabase();
+
+      // ユーザーが参加しているサブグループ、または管理しているサブグループを取得
+      const query = `
+        SELECT DISTINCT
+          sg.id,
+          sg.name,
+          g.name as group_name,
+          sg.admin_id,
+          admin_user.name as admin_name,
+          CASE
+            WHEN sg.admin_id = ? THEN 'admin'
+            WHEN sgm.user_id = ? THEN 'member'
+            ELSE null
+          END as user_role_in_subgroup,
+          (
+            SELECT COUNT(*)
+            FROM sub_group_members sgm2
+            WHERE sgm2.subgroup_id = sg.id
+          ) as member_count
+        FROM sub_groups sg
+        JOIN groups g ON sg.group_id = g.id
+        LEFT JOIN sub_group_members sgm ON sg.id = sgm.subgroup_id
+        LEFT JOIN users admin_user ON sg.admin_id = admin_user.id
+        WHERE sg.admin_id = ?
+        ORDER BY sg.name
+      `;
+
+      const result = await db.all(query, [user.id, user.id, user.id]);
+
+      const subgroups = result.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        groupName: row.group_name,
+        adminId: row.admin_id,
+        adminName: row.admin_name,
+        userRole: row.user_role_in_subgroup,
+        memberCount: parseInt(row.member_count),
+        canSchedule: row.user_role_in_subgroup === 'admin' || ((user as any).role === 'super_admin')
+      }));
+
+      return res.json({
+        subgroups,
+        total: subgroups.length,
+        message: 'アクセス可能なサブグループ情報を取得しました'
+      });
+
+    } catch (error) {
+      console.error('サブグループ一覧取得エラー:', error);
+      return res.status(500).json({
+        error: 'サブグループ一覧の取得に失敗しました',
+        message: 'サーバーエラーが発生しました'
+      });
+    }
+  }
+);
+
+export default router;
