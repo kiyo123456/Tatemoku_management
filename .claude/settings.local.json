@@ -13,7 +13,8 @@
       "Read(///**)",
       "Bash(python:*)",
       "Bash(nc:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
