@@ -12,15 +12,24 @@ export async function initializeDatabase() {
     const databaseUrl = process.env.DATABASE_URL;
 
     if (!databaseUrl) {
-      throw new Error('DATABASE_URL環境変数が設定されていません');
+      console.warn('⚠️ DATABASE_URL環境変数が設定されていません - 開発モードで継続');
+      // 開発環境では警告のみで続行
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('DATABASE_URL環境変数が設定されていません');
+      }
+      return null;
     }
 
     pool = new Pool({
       connectionString: databaseUrl,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      // 接続プールの設定を追加
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
     });
 
-    console.log('✅ PostgreSQL データベース接続成功');
+    console.log('✅ PostgreSQL データベース接続プール作成完了');
 
     // DbHelperインスタンスを作成
     dbHelper = new DbHelper(pool);
@@ -66,18 +75,24 @@ export async function closeDatabase(): Promise<void> {
 // データベース接続テスト
 export async function testDatabaseConnection(): Promise<boolean> {
   try {
-    await initializeDatabase();
-    const database = getDatabase();
-    const client = await database.connect();
+    const poolResult = await initializeDatabase();
+
+    if (!poolResult || !pool) {
+      console.warn('⚠️ データベースプールが初期化されていません');
+      return false;
+    }
+
+    const client = await pool.connect();
     try {
       const result = await client.query('SELECT NOW() as current_time');
-      console.log('✅ データベース接続成功:', result.rows[0]?.current_time);
+      console.log('✅ データベース接続テスト成功:', result.rows[0]?.current_time);
       return true;
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error('❌ データベース接続失敗:', error);
+    console.error('❌ データベース接続テスト失敗:', error);
+    console.error('   エラー詳細:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }

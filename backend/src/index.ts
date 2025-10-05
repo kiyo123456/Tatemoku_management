@@ -458,12 +458,24 @@ app.get('/api/admin/test-data', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => {
-  return res.json({
+app.get('/health', async (req, res) => {
+  const health = {
     status: 'OK',
     message: '縦もく日程調整システム API',
-    timestamp: new Date().toISOString()
-  });
+    timestamp: new Date().toISOString(),
+    database: 'unknown',
+    environment: process.env.NODE_ENV || 'development'
+  };
+
+  // データベース接続状況をチェック
+  try {
+    const dbOk = await testDatabaseConnection();
+    health.database = dbOk ? 'connected' : 'disconnected';
+  } catch (error) {
+    health.database = 'error';
+  }
+
+  return res.json(health);
 });
 
 app.get('/api/status', (req, res) => {
@@ -508,11 +520,16 @@ app.listen(PORT, async () => {
 
   // データベース初期化
   try {
-    initializeDatabase();
-    await testDatabaseConnection();
+    await initializeDatabase();
+    const connectionOk = await testDatabaseConnection();
+    if (connectionOk) {
+      console.log('✅ データベース接続: 完了');
+    } else {
+      console.warn('⚠️  データベース接続: 失敗 - アプリは起動しますがDB機能は利用できません');
+    }
   } catch (error) {
-    console.error('⚠️  データベース接続: 失敗');
-    console.error('   データベースが起動していることを確認してください');
+    console.error('❌ データベース初期化エラー:', error);
+    console.warn('⚠️  データベースなしでアプリを起動します');
   }
 
   // Google設定チェック
