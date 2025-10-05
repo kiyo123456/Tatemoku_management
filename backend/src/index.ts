@@ -102,6 +102,7 @@ app.listen(PORT, () => {
   console.log(`🔗 ヘルスチェック: http://localhost:${PORT}/health`);
   console.log(`📱 API情報: http://localhost:${PORT}/api`);
   console.log(`🔧 開発モード: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 デプロイバージョン: v2.0 - TypeScript修正版`);
 
   if (!process.env.DATABASE_URL) {
     console.log(`⚠️ データベース接続は設定されていません（動作確認モード）`);
