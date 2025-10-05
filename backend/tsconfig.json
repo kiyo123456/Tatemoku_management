@@ -25,6 +25,13 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/index.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/routes/**",
+    "src/services/**",
+    "src/middleware/**",
+    "src/lib/**"
+  ]
 }
