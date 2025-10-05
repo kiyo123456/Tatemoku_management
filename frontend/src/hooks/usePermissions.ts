@@ -25,9 +25,9 @@ export const usePermissions = () => {
       try {
         const response = await tatemokuAPI.getUserPermissions(user.id);
         setUserPermission(response.permissions);
-      } catch (apiError) {
+      } catch (error) {
         // APIが未実装の場合はモックデータを使用
-        console.log('API未実装のため、モックデータを使用します');
+        console.log('API未実装のため、モックデータを使用します:', error);
 
         const mockPermission: UserPermission = {
           userId: user.id,

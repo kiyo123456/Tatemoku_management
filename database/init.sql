@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS google_calendar_tokens (
 -- Googleカレンダーイベント管理テーブル
 CREATE TABLE IF NOT EXISTS google_calendar_events (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    session_id TEXT NOT NULL REFERENCES tatemoku_sessions(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
     google_event_id TEXT NOT NULL,
     created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

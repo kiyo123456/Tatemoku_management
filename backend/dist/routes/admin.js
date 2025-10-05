@@ -224,7 +224,8 @@ router.put('/members/:userId/role', auth_1.authenticateToken, permissions_1.requ
                 });
             }
             const isSuperAdmin = role === 'super_admin';
-            await db.run('UPDATE users SET role = ?, is_super_admin = ?, updated_at = datetime("now") WHERE id = ?', [role, isSuperAdmin, userId]);
+            const dbRole = role === 'super_admin' ? 'admin' : role;
+            await db.run('UPDATE users SET role = ?, is_super_admin = ?, updated_at = datetime("now") WHERE id = ?', [dbRole, isSuperAdmin ? 1 : 0, userId]);
             console.log(`[SUPER_ADMIN_ACTION] ${user.email} がユーザー ${targetUser.name}(${userId}) の権限を ${targetUser.role} から ${role} に変更`);
             return res.json({
                 success: true,
@@ -434,6 +435,81 @@ router.post('/subgroups/:subgroupId/members', auth_1.authenticateToken, permissi
         console.error('サブグループメンバー割り当てエラー:', error);
         return res.status(500).json({
             error: 'メンバーの割り当てに失敗しました',
+            message: 'サーバーエラーが発生しました'
+        });
+    }
+});
+router.delete('/subgroups/:subgroupId/members/:memberId', auth_1.authenticateToken, permissions_1.requireSuperAdmin, async (req, res) => {
+    try {
+        const { subgroupId, memberId } = req.params;
+        const user = req.user;
+        const db = (0, database_1.getDatabase)();
+        const subgroupCheck = await db.get('SELECT id FROM sub_groups WHERE id = ?', [subgroupId]);
+        if (!subgroupCheck) {
+            return res.status(404).json({
+                error: 'サブグループが見つかりません',
+                message: '指定されたサブグループが存在しません'
+            });
+        }
+        const memberCheck = await db.get('SELECT * FROM sub_group_members WHERE subgroup_id = ? AND user_id = ?', [subgroupId, memberId]);
+        if (!memberCheck) {
+            return res.status(404).json({
+                error: 'メンバーが見つかりません',
+                message: 'そのメンバーは指定されたサブグループに属していません'
+            });
+        }
+        await db.run('DELETE FROM sub_group_members WHERE subgroup_id = ? AND user_id = ?', [subgroupId, memberId]);
+        console.log(`[SUPER_ADMIN_ACTION] ${user.email} がサブグループ ${subgroupId} からメンバー ${memberId} を削除`);
+        return res.json({
+            success: true,
+            message: 'メンバーをサブグループから削除しました',
+            operation: {
+                action: 'remove_from_subgroup',
+                subgroupId,
+                memberId,
+                executedBy: user.id,
+                timestamp: new Date().toISOString()
+            }
+        });
+    }
+    catch (error) {
+        console.error('サブグループメンバー削除エラー:', error);
+        return res.status(500).json({
+            error: 'メンバーの削除に失敗しました',
+            message: 'サーバーエラーが発生しました'
+        });
+    }
+});
+router.delete('/members/:memberId/subgroups', auth_1.authenticateToken, permissions_1.requireSuperAdmin, async (req, res) => {
+    try {
+        const { memberId } = req.params;
+        const user = req.user;
+        const db = (0, database_1.getDatabase)();
+        const userCheck = await db.get('SELECT id FROM users WHERE id = ?', [memberId]);
+        if (!userCheck) {
+            return res.status(404).json({
+                error: 'ユーザーが見つかりません',
+                message: '指定されたユーザーが存在しません'
+            });
+        }
+        const result = await db.run('DELETE FROM sub_group_members WHERE user_id = ?', [memberId]);
+        console.log(`[SUPER_ADMIN_ACTION] ${user.email} がメンバー ${memberId} を全てのサブグループから削除`);
+        return res.json({
+            success: true,
+            message: 'メンバーを全てのサブグループから削除しました',
+            removedCount: result.changes,
+            operation: {
+                action: 'remove_from_all_subgroups',
+                memberId,
+                executedBy: user.id,
+                timestamp: new Date().toISOString()
+            }
+        });
+    }
+    catch (error) {
+        console.error('メンバーサブグループ削除エラー:', error);
+        return res.status(500).json({
+            error: 'メンバーの削除に失敗しました',
             message: 'サーバーエラーが発生しました'
         });
     }

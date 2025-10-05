@@ -48,7 +48,7 @@ const requireSuperAdmin = (req, res, next) => {
         });
         return;
     }
-    if (!req.user.is_super_admin || req.user.role !== UserRole.SUPER_ADMIN) {
+    if (!req.user.is_super_admin) {
         res.status(403).json({
             error: 'アクセス拒否',
             message: 'スーパー管理者権限が必要です'
@@ -111,7 +111,7 @@ const hasPermission = (user, requiredRole) => {
 };
 exports.hasPermission = hasPermission;
 const isSuperAdmin = (user) => {
-    return user.is_super_admin && user.role === UserRole.SUPER_ADMIN;
+    return user.is_super_admin;
 };
 exports.isSuperAdmin = isSuperAdmin;
 const isGroupAdmin = (user) => {

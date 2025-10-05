@@ -30,7 +30,7 @@ export interface ChangeLog {
   fromGroup?: TatemokuGroup;
   toGroup?: TatemokuGroup;
   changedByUserId: number;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   timestamp: string;
 }
 
