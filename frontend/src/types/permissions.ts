@@ -43,7 +43,7 @@ export const createPermissionChecker = (userPermission: UserPermission): Permiss
       return false;
     },
 
-    canViewGroup: (groupId: number) => {
+    canViewGroup: (_groupId: number) => {
       // 全ユーザーが閲覧可能
       return true;
     },

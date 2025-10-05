@@ -57,7 +57,7 @@ export interface AvailabilityResponse {
   };
 }
 
-export interface CalendarAPIResponse<T = any> {
+export interface CalendarAPIResponse<T = unknown> {
   message: string;
   data?: T;
   error?: string;
