@@ -10,6 +10,7 @@ const router = express_1.default.Router();
 router.get('/:subgroupId/members', auth_1.authenticateToken, async (req, res) => {
     try {
         const { subgroupId } = req.params;
+        const user = req.user;
         const db = (0, database_1.getDatabase)();
         const subgroupQuery = `
         SELECT
@@ -18,13 +19,19 @@ router.get('/:subgroupId/members', auth_1.authenticateToken, async (req, res) =>
           g.id as group_id,
           g.name as group_name,
           sg.admin_id,
-          admin_user.name as admin_name
+          admin_user.name as admin_name,
+          CASE
+            WHEN sg.admin_id = ? THEN 'admin'
+            WHEN sgm.user_id = ? THEN 'member'
+            ELSE null
+          END as user_access_level
         FROM sub_groups sg
         JOIN groups g ON sg.group_id = g.id
         LEFT JOIN users admin_user ON sg.admin_id = admin_user.id
+        LEFT JOIN sub_group_members sgm ON sg.id = sgm.subgroup_id AND sgm.user_id = ?
         WHERE sg.id = ?
       `;
-        const subgroupResult = await db.all(subgroupQuery, [subgroupId]);
+        const subgroupResult = await db.all(subgroupQuery, [user.id, user.id, user.id, subgroupId]);
         if (subgroupResult.length === 0) {
             return res.status(404).json({
                 error: 'サブグループが見つかりません',
@@ -32,6 +39,15 @@ router.get('/:subgroupId/members', auth_1.authenticateToken, async (req, res) =>
             });
         }
         const subgroup = subgroupResult[0];
+        const hasAccess = subgroup.user_access_level === 'admin' ||
+            subgroup.user_access_level === 'member' ||
+            user.role === 'super_admin';
+        if (!hasAccess) {
+            return res.status(403).json({
+                error: 'アクセス権限がありません',
+                message: 'このサブグループのメンバー情報にアクセスする権限がありません'
+            });
+        }
         const membersQuery = `
         SELECT
           u.id,

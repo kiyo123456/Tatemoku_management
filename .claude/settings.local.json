@@ -15,7 +15,14 @@
       "Bash(nc:*)",
       "Bash(pkill:*)",
       "Bash(git add:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run setup:*)",
+      "Bash(docker-compose:*)",
+      "Bash(npm run:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(railway:*)",
+      "WebFetch(domain:qiita.com)"
     ],
     "deny": [],
     "ask": []

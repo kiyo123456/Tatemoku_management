@@ -104,58 +104,32 @@ app.get('/auth/google/callback', async (req, res) => {
         if (!userInfo.data.email) {
             throw new Error('ユーザー情報の取得に失敗しました');
         }
-        const db = await Promise.resolve().then(() => __importStar(require('./lib/database'))).then(m => m.getDatabase());
-        let existingUser = await db.get(`
-      SELECT id, google_id, email, name, picture, role, is_super_admin, created_at
-      FROM users
-      WHERE email = ? OR google_id = ?
-    `, [userInfo.data.email, userInfo.data.id]);
-        let isNewUser = false;
-        let user;
-        if (!existingUser) {
-            const predefinedUser = await db.get(`
+        const pool = await Promise.resolve().then(() => __importStar(require('./lib/database'))).then(m => m.getDatabase());
+        const client = await pool.connect();
+        try {
+            const existingUserQuery = await client.query(`
         SELECT id, google_id, email, name, picture, role, is_super_admin, created_at
         FROM users
-        WHERE email = ? AND google_id IS NULL
-      `, [userInfo.data.email]);
-            if (predefinedUser) {
-                console.log(`事前定義ユーザーのGoogle ID設定: ${userInfo.data.email}`);
-                await db.run(`
-          UPDATE users
-          SET google_id = ?, name = ?, picture = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `, [
-                    userInfo.data.id,
-                    userInfo.data.name || predefinedUser.name,
-                    userInfo.data.picture || predefinedUser.picture,
-                    predefinedUser.id
-                ]);
-                user = {
-                    id: predefinedUser.id,
-                    google_id: userInfo.data.id,
-                    email: predefinedUser.email,
-                    name: userInfo.data.name || predefinedUser.name,
-                    picture: userInfo.data.picture || predefinedUser.picture,
-                    role: predefinedUser.role,
-                    is_super_admin: predefinedUser.is_super_admin
-                };
-                console.log(`✅ 事前定義ユーザーのGoogle認証完了: ${user.email} (Role: ${user.role}, Super Admin: ${user.is_super_admin})`);
-            }
-            else {
+        WHERE email = $1 OR google_id = $2
+      `, [userInfo.data.email, userInfo.data.id]);
+            let existingUser = existingUserQuery.rows[0] || null;
+            let isNewUser = false;
+            let user;
+            if (!existingUser) {
                 isNewUser = true;
                 console.log(`新規ユーザー登録: ${userInfo.data.email}`);
                 const defaultGroup = await db.get(`
-          SELECT id FROM groups WHERE id = 'group_main' OR name LIKE '%メイン%' OR name LIKE '%デフォルト%'
-          ORDER BY created_at ASC LIMIT 1
-        `);
+        SELECT id FROM groups WHERE id = 'group_posse2' OR name LIKE '%posse②%'
+        ORDER BY created_at ASC LIMIT 1
+      `);
                 if (!defaultGroup) {
                     throw new Error('デフォルトグループが見つかりません');
                 }
                 const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                 await db.run(`
-          INSERT INTO users (id, google_id, email, name, picture, role, is_super_admin, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'member', 0, datetime('now'), datetime('now'))
-        `, [
+        INSERT INTO users (id, google_id, email, name, picture, role, is_super_admin, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'member', 0, datetime('now'), datetime('now'))
+      `, [
                     userId,
                     userInfo.data.id,
                     userInfo.data.email,
@@ -163,9 +137,9 @@ app.get('/auth/google/callback', async (req, res) => {
                     userInfo.data.picture || null
                 ]);
                 await db.run(`
-          INSERT INTO group_members (id, group_id, user_id, role, joined_at, created_at, updated_at)
-          VALUES (?, ?, ?, 'member', datetime('now'), datetime('now'), datetime('now'))
-        `, [
+        INSERT INTO group_members (id, group_id, user_id, role, joined_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'member', datetime('now'), datetime('now'), datetime('now'))
+      `, [
                     `gm_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                     defaultGroup.id,
                     userId
@@ -181,42 +155,43 @@ app.get('/auth/google/callback', async (req, res) => {
                 };
                 console.log(`✅ 新規ユーザー登録完了: ${user.email} (ID: ${user.id})`);
             }
-        }
-        else {
-            console.log(`既存ユーザーログイン: ${existingUser.email}`);
-            await db.run(`
+            else {
+                console.log(`既存ユーザーログイン: ${existingUser.email}`);
+                await db.run(`
         UPDATE users
         SET name = ?, picture = ?, updated_at = datetime('now')
         WHERE id = ?
       `, [
-                userInfo.data.name || existingUser.name,
-                userInfo.data.picture || existingUser.picture,
-                existingUser.id
-            ]);
-            user = {
-                id: existingUser.id,
-                google_id: existingUser.google_id,
-                email: existingUser.email,
-                name: userInfo.data.name || existingUser.name,
-                picture: userInfo.data.picture || existingUser.picture,
-                role: existingUser.role,
-                is_super_admin: existingUser.is_super_admin
-            };
+                    userInfo.data.name || existingUser.name,
+                    userInfo.data.picture || existingUser.picture,
+                    existingUser.id
+                ]);
+                user = {
+                    id: existingUser.id,
+                    google_id: existingUser.google_id,
+                    email: existingUser.email,
+                    name: userInfo.data.name || existingUser.name,
+                    picture: userInfo.data.picture || existingUser.picture,
+                    role: existingUser.role,
+                    is_super_admin: existingUser.is_super_admin
+                };
+            }
+            const jwtToken = (0, auth_1.generateAccessToken)({
+                id: user.id,
+                email: user.email,
+                name: user.name
+            });
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            const redirectPath = isNewUser ? '/welcome' : '/dashboard';
+            return res.redirect(`${frontendUrl}${redirectPath}?token=${jwtToken}&user=${encodeURIComponent(JSON.stringify(user))}&newUser=${isNewUser}`);
         }
-        const jwtToken = (0, auth_1.generateAccessToken)({
-            id: user.id,
-            email: user.email,
-            name: user.name
-        });
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        const redirectPath = isNewUser ? '/welcome' : '/dashboard';
-        return res.redirect(`${frontendUrl}${redirectPath}?token=${jwtToken}&user=${encodeURIComponent(JSON.stringify(user))}&newUser=${isNewUser}`);
+        catch (error) {
+            console.error('Google認証コールバックエラー:', error);
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            return res.redirect(`${frontendUrl}/login?error=auth_failed`);
+        }
     }
-    catch (error) {
-        console.error('Google認証コールバックエラー:', error);
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        return res.redirect(`${frontendUrl}/login?error=auth_failed`);
-    }
+    finally { }
 });
 app.get('/api/auth/google/callback', async (req, res) => {
     try {
@@ -263,6 +238,43 @@ app.get('/api/auth/google/callback', async (req, res) => {
             error: 'Google認証に失敗しました',
             message: '認証プロセスを最初からやり直してください'
         });
+    }
+});
+app.get('/api/auth/me', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader) {
+            return res.status(401).json({ error: 'Authorization header required' });
+        }
+        const token = authHeader.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({ error: 'Token required' });
+        }
+        const jwt = await Promise.resolve().then(() => __importStar(require('jsonwebtoken')));
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
+        if (typeof decoded === 'object' && decoded.id) {
+            const db = await Promise.resolve().then(() => __importStar(require('./lib/database'))).then(m => m.getDatabase());
+            const user = await db.get(`
+        SELECT id, email, name, role, is_super_admin
+        FROM users WHERE id = ?
+      `, [decoded.id]);
+            if (user) {
+                return res.json({
+                    user: {
+                        id: user.id,
+                        email: user.email,
+                        name: user.name,
+                        role: user.role,
+                        is_super_admin: Boolean(user.is_super_admin)
+                    }
+                });
+            }
+        }
+        return res.status(404).json({ error: 'User not found' });
+    }
+    catch (error) {
+        console.error('Current user fetch error:', error);
+        return res.status(401).json({ error: 'Invalid token' });
     }
 });
 app.post('/api/auth/dev-login', async (req, res) => {
@@ -394,12 +406,22 @@ app.get('/api/admin/test-data', async (req, res) => {
         });
     }
 });
-app.get('/health', (req, res) => {
-    return res.json({
+app.get('/health', async (req, res) => {
+    const health = {
         status: 'OK',
         message: '縦もく日程調整システム API',
-        timestamp: new Date().toISOString()
-    });
+        timestamp: new Date().toISOString(),
+        database: 'unknown',
+        environment: process.env.NODE_ENV || 'development'
+    };
+    try {
+        const dbOk = await (0, database_1.testDatabaseConnection)();
+        health.database = dbOk ? 'connected' : 'disconnected';
+    }
+    catch (error) {
+        health.database = 'error';
+    }
+    return res.json(health);
 });
 app.get('/api/status', (req, res) => {
     return res.json({
@@ -438,12 +460,18 @@ app.listen(PORT, async () => {
     console.log(`📊 Status: http://localhost:${PORT}/api/status`);
     console.log('');
     try {
-        (0, database_1.initializeDatabase)();
-        await (0, database_1.testDatabaseConnection)();
+        await (0, database_1.initializeDatabase)();
+        const connectionOk = await (0, database_1.testDatabaseConnection)();
+        if (connectionOk) {
+            console.log('✅ データベース接続: 完了');
+        }
+        else {
+            console.warn('⚠️  データベース接続: 失敗 - アプリは起動しますがDB機能は利用できません');
+        }
     }
     catch (error) {
-        console.error('⚠️  データベース接続: 失敗');
-        console.error('   データベースが起動していることを確認してください');
+        console.error('❌ データベース初期化エラー:', error);
+        console.warn('⚠️  データベースなしでアプリを起動します');
     }
     const hasValidConfig = process.env.GOOGLE_CLIENT_ID &&
         process.env.GOOGLE_CLIENT_ID !== 'your_google_client_id.apps.googleusercontent.com';

@@ -1,7 +1,8 @@
-import sqlite3 from 'sqlite3';
-import { Database } from 'sqlite';
-export declare function initializeDatabase(): Promise<Database<sqlite3.Database, sqlite3.Statement>>;
-export declare function getDatabase(): Database;
+import { Pool } from 'pg';
+import { DbHelper } from './db-helpers';
+export declare function initializeDatabase(): Promise<Pool | null>;
+export declare function getDatabase(): Pool;
+export declare function getDatabaseHelper(): DbHelper;
 export declare function closeDatabase(): Promise<void>;
 export declare function testDatabaseConnection(): Promise<boolean>;
 //# sourceMappingURL=database.d.ts.map
