@@ -94,14 +94,18 @@ app.get('/auth/google/callback', async (req, res) => {
     }
 
     // データベース接続
-    const db = await import('./lib/database').then(m => m.getDatabase());
+    const pool = await import('./lib/database').then(m => m.getDatabase());
+    const client = await pool.connect();
 
-    // 既存ユーザーかチェック
-    let existingUser = await db.get(`
-      SELECT id, google_id, email, name, picture, role, is_super_admin, created_at
-      FROM users
-      WHERE email = ? OR google_id = ?
-    `, [userInfo.data.email, userInfo.data.id]);
+    try {
+      // 既存ユーザーかチェック
+      const existingUserQuery = await client.query(`
+        SELECT id, google_id, email, name, picture, role, is_super_admin, created_at
+        FROM users
+        WHERE email = $1 OR google_id = $2
+      `, [userInfo.data.email, userInfo.data.id]);
+
+      let existingUser = existingUserQuery.rows[0] || null;
 
     let isNewUser = false;
     let user: any;
